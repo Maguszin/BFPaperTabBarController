@@ -55,25 +55,20 @@ Selects and highlights a tab.<br />
 
 To Do
 ---------
-Support tabBars with non-equally distributed tab widths.
+Support programmatic instantiation.
 
 
 Usage
 ---------
+**_BFPaperTabBarController_ is only supported in the Interface Builder.**<br />
 Add the _BFPaperTabBarController_ header and implementation file to your project. (.h & .m)
 
 ### Subclass!
-The easiest way to use a BFPaperTabBarController is to create a UITabBarController object and set its superclass to BFPaperTabBarController.
+To use a BFPaperTabBarController, create a UITabBarController object and set its superclass to BFPaperTabBarController.
 ```objective-c
 @interface MyTabBarController : BFPaperTabBarController
 //...
 @end
-```
-
-
-### Programmatically Creating a BFPaperTabBar
-```objective-c
-BFPaperTabBarController *tabBarController = [[BFPaperTabBarController alloc] init];
 ```
 
 ### Customized Example
@@ -109,7 +104,7 @@ Learn more at http://cocoapods.org
 Add this to your podfile to add BFPaperTabBarController to your project.
 ```ruby
 platform :ios, '7.0'
-pod 'BFPaperTabBarController', '~> 1.3.2'
+pod 'BFPaperTabBarController', '~> 1.4.4'
 ```
 
 

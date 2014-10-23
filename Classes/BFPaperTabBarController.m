@@ -46,6 +46,9 @@
 @end
 
 @implementation BFPaperTabBarController
+static void *BFPaperTabBarControllerContext = &BFPaperTabBarControllerContext;
+static NSString *BFPaperTabBarControllerKVOKeyPath_hidden = @"hidden";
+CGFloat const bfPaperTabBarController_tapCircleDiameterDefault = -1.f;
 // Constants used for tweaking the look/feel of:
 // -animation durations:
 static CGFloat const bfPaperTabBarController_animationDurationConstant       = 0.2f;
@@ -99,16 +102,29 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 
 
 #pragma mark - View Controller Life Cycle
-- (void)viewDidLoad
+- (void)viewWillDisappear:(BOOL)animated
 {
-    [super viewDidLoad];
-    // Do any additional setup after loading the view.
+    // Try to remove ourselves from the KVO system:
+    @try {
+        [self.tabBar removeObserver:self forKeyPath:BFPaperTabBarControllerKVOKeyPath_hidden];
+    }
+    @catch (NSException * __unused exception) {
+        NSLog(@"Exception \'%@\' caught!\nReason: \'%@\'", exception.name, exception.reason);
+    }
+    
+    [super viewWillDisappear:animated];
 }
 
-- (void)didReceiveMemoryWarning
+- (void)dealloc
 {
-    [super didReceiveMemoryWarning];
-    // Dispose of any resources that can be recreated.
+    // Depending on the situation, sometimes viewWillDisappear isn't called when deallocated (swaping window root view controllers, etc.) so this is here to handle those rare situations.
+    // Try to remove ourselves from the KVO system:
+    @try {
+        [self.tabBar removeObserver:self forKeyPath:BFPaperTabBarControllerKVOKeyPath_hidden];
+    }
+    @catch (NSException * __unused exception) {
+        NSLog(@"Exception \'%@\' caught!\nReason: \'%@\'", exception.name, exception.reason);
+    }
 }
 
 /*
@@ -128,13 +144,17 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 {
     [super viewDidLayoutSubviews];
     
-    self.tabRects = [self calculateTabRects];
-    self.invisibleTappableTabRects = [self calculateInvisibleTabRects];
-    self.animationsView.frame = self.tabBar.bounds;
-    self.invisibleTouchView.frame = self.tabBar.frame;
+    [self updateTabBarVisuals];
     
-    if (self.showUnderline) {
-        [self setUnderlineForTabIndex:self.selectedTabIndex animated:NO];
+    // Account for hidden tabBar:
+    if (self.tabBar.isHidden) {
+        //NSLog(@"hiding tap area");
+        self.invisibleTouchView.hidden = YES;
+    }
+    else {
+        //NSLog(@"showing tap area");
+        self.invisibleTouchView.hidden = NO;
+        [self.view bringSubviewToFront:self.invisibleTouchView];
     }
 }
 
@@ -148,13 +168,13 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
     // Initializations that depend on above defaults:
     
     // Set up the view which will hold all the animations:
-    self.animationsView = [[UIView alloc] init];
+    self.animationsView = [[UIView alloc] initWithFrame:self.tabBar.bounds];
     self.animationsView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.animationsView.backgroundColor = [UIColor clearColor];
     [self.tabBar insertSubview:self.animationsView atIndex:0];
     
     // Set up the invisible layer to capture taps:
-    self.invisibleTouchView = [[UIView alloc] init];
+    self.invisibleTouchView = [[UIView alloc] initWithFrame:self.tabBar.frame];
     self.invisibleTouchView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.invisibleTouchView.backgroundColor = [UIColor clearColor];
     self.invisibleTouchView.userInteractionEnabled = YES;
@@ -169,6 +189,9 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
     press.minimumPressDuration = 0;
     [self.invisibleTouchView addGestureRecognizer:press];
     press = nil;
+
+    // Set up tab bar for KVO on its 'hidden' key:
+    [self.tabBar addObserver:self forKeyPath:BFPaperTabBarControllerKVOKeyPath_hidden options:0 context:BFPaperTabBarControllerContext];
     
     
     // More Defaults:
@@ -198,33 +221,6 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
     self.backgroundColorFadeLayer.frame = endRect;
     self.backgroundColorFadeLayer.backgroundColor = [UIColor clearColor].CGColor;
     [self.animationsView.layer insertSublayer:self.backgroundColorFadeLayer atIndex:0];
-}
-
-- (void)setUnderlineForTabIndex:(NSInteger)index animated:(BOOL)animated    // animated affects nothing. What's going on?
-{
-    //NSLog(@"setting underline to index: %d", index);
-    
-    CGRect tabRect = [[self.tabRects objectAtIndex:index] CGRectValue];
-    
-    UIColor *bgColor = self.underlineColor;
-    if (!bgColor) {
-        bgColor = self.usesSmartColor ? self.tabBar.tintColor : BFPAPERTABBARCONTROLLER__DUMB_UNDERLINE_COLOR;
-    }
-    self.underlineLayer.backgroundColor = bgColor;
-    CGFloat x = tabRect.origin.x;
-    CGFloat y = tabRect.size.height - self.underlineThickness;
-    CGFloat w = tabRect.size.width;
-    
-    if (animated) {
-        CGFloat duration = bfPaperTabBarController_animationDurationConstant;
-        [UIView animateWithDuration:duration delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
-            self.underlineLayer.frame = CGRectMake(x, y, w, self.underlineThickness);
-        } completion:^(BOOL finished) {
-        }];
-    }
-    else {
-        self.underlineLayer.frame = CGRectMake(x, y, w, self.underlineThickness);
-    }
 }
 
 
@@ -257,7 +253,7 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
             CGFloat y = self.tabBar.bounds.size.height - self.underlineThickness;
             self.underlineLayer = [UIView new];
             self.underlineLayer.frame = CGRectMake(self.tabBar.bounds.origin.x, y, self.tabBar.bounds.size.width, self.underlineThickness);
-            NSLog(@"underline frame: (%0.2f, %0.2f, %0.2f, %0.2f)", self.underlineLayer.frame.origin.x, self.underlineLayer.frame.origin.y, self.underlineLayer.frame.size.width, self.underlineLayer.frame.size.height);
+            //NSLog(@"underline frame: (%0.2f, %0.2f, %0.2f, %0.2f)", self.underlineLayer.frame.origin.x, self.underlineLayer.frame.origin.y, self.underlineLayer.frame.size.width, self.underlineLayer.frame.size.height);
 
             [self.animationsView addSubview:self.underlineLayer];
             [self setUnderlineForTabIndex:self.selectedTabIndex animated:NO];
@@ -266,15 +262,27 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 }
 
 
-#pragma mark - Utility Functions
-- (void)selectTabAtIndex:(NSInteger)index animated:(BOOL)animated
+#pragma mark - KVO Handling
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context
 {
-    [self setSelectedIndex:index];
-    self.selectedTabIndex = index;
-    [self setUnderlineForTabIndex:index animated:animated];
-    [self setBackgroundFadeLayerForTabAtIndex:index];
+    if (context == BFPaperTabBarControllerContext) {
+        if ([keyPath isEqualToString:BFPaperTabBarControllerKVOKeyPath_hidden]) {
+            //NSLog(@"\n\n\nKVO: tabBar is %@\n\n\n", self.tabBar.isHidden ? @"HIDDEN" : @"VISIBLE");
+            if (self.tabBar.isHidden) {
+                //NSLog(@"hiding tap area");
+                self.invisibleTouchView.hidden = YES;
+            }
+            else {
+                //NSLog(@"showing tap area");
+                self.invisibleTouchView.hidden = NO;
+                [self.view bringSubviewToFront:self.invisibleTouchView];
+                [self.view setNeedsLayout];
+                [self.view layoutIfNeeded];
+            }
+        }
+    }
 }
- 
+
 
 #pragma mark - Gesture Recognizer Handlers
 - (void)handleLongPress:(UILongPressGestureRecognizer *)longPress
@@ -299,8 +307,16 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
         
         
         // Draw tap-circle:
-        CGFloat x = fmod(location.x, [[self.tabRects objectAtIndex:self.selectedTabIndex] CGRectValue].size.width);
-        self.tapPoint = CGPointMake(x, location.y);
+        //NSLog(@"PRE point: (%0.2f, %0.2f) [tab %d]", location.x, location.y, self.selectedTabIndex);
+        UIView *tempSizerView = [[UIView alloc] initWithFrame:[[self.tabRects objectAtIndex:self.selectedTabIndex] CGRectValue]];   // Throw this temp view in to get sizes calculated nicely, then remove it. I KNOW I KNOW!! Fix this and submit a pull request ;)
+        tempSizerView.backgroundColor = [UIColor clearColor];
+        [self.tabBar insertSubview:tempSizerView belowSubview:self.animationsView];
+        CGPoint newLocation = [self.view convertPoint:location toView:tempSizerView];
+        //NSLog(@"POST point: (%0.2f, %0.2f) [tab %d]", newLocation.x, newLocation.y, self.selectedTabIndex);
+        [tempSizerView removeFromSuperview];
+        tempSizerView = nil;
+
+        self.tapPoint = CGPointMake(newLocation.x, location.y);
         
         if (self.showTapCircleAndBackgroundFade) {
             [self growTapCircle];
@@ -330,8 +346,61 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 {
     return YES;
 }
-#pragma mark -
 
+
+#pragma mark - Public Utility Functions
+- (void)selectTabAtIndex:(NSInteger)index animated:(BOOL)animated
+{
+    [self setSelectedIndex:index];
+    self.selectedTabIndex = index;
+    [self setUnderlineForTabIndex:index animated:animated];
+    [self setBackgroundFadeLayerForTabAtIndex:index];
+}
+
+
+#pragma mark - Tab Utility Methods
+- (void)setUnderlineForTabIndex:(NSInteger)index animated:(BOOL)animated    // animated affects nothing. What's going on?
+{
+    //NSLog(@"setting underline to index: %d", index);
+    
+    CGRect tabRect = [[self.tabRects objectAtIndex:index] CGRectValue];
+    
+    UIColor *bgColor = self.underlineColor;
+    if (!bgColor) {
+        bgColor = self.usesSmartColor ? self.tabBar.tintColor : BFPAPERTABBARCONTROLLER__DUMB_UNDERLINE_COLOR;
+    }
+    self.underlineLayer.backgroundColor = bgColor;
+    CGFloat x = tabRect.origin.x;
+    CGFloat y = tabRect.size.height - self.underlineThickness;
+    CGFloat w = tabRect.size.width;
+    
+    if (animated) {
+        CGFloat duration = bfPaperTabBarController_animationDurationConstant;
+        [UIView animateWithDuration:duration delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+            self.underlineLayer.frame = CGRectMake(x, y, w, self.underlineThickness);
+        } completion:^(BOOL finished) {
+        }];
+    }
+    else {
+        self.underlineLayer.frame = CGRectMake(x, y, w, self.underlineThickness);
+    }
+}
+
+- (void)updateTabBarVisuals
+{
+    double delayInSeconds = 0.1;
+    dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, delayInSeconds * NSEC_PER_SEC);
+    dispatch_after(popTime, dispatch_get_main_queue(), ^(void){
+        self.tabRects = [self calculateTabRects];
+        self.invisibleTappableTabRects = [self calculateInvisibleTabRects];
+        self.animationsView.frame = self.tabBar.bounds;
+        self.invisibleTouchView.frame = self.tabBar.frame;
+        
+        if (self.showUnderline) {
+            [self setUnderlineForTabIndex:self.selectedTabIndex animated:NO];
+        }
+    });
+}
 
 - (void)selectTabForPoint:(CGPoint)point
 {
@@ -388,33 +457,129 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 
 - (NSMutableArray *)calculateTabRects
 {
-    CGRect tabBarRect = self.tabBar.bounds;
-    NSInteger tabCount = self.tabBar.items.count;
-    CGFloat tabWidth = tabBarRect.size.width / tabCount;
-    NSMutableArray *returnArray = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
-    for (int i = 0; i < tabCount; i++) {
-        CGRect tabRect = CGRectMake(tabWidth * i, 0, tabWidth, tabBarRect.size.height);
-        [returnArray addObject:[NSValue valueWithCGRect:tabRect]];
+    //NSLog(@"calculating Tab Rects with tabBar.bounds.size.width = \'%0.2f\'", self.tabBar.bounds.size.width);
+    NSMutableArray *preSizeAdjustment = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+    for (int i = 0; i < self.tabBar.items.count; i++) {
+        CGRect tabRect = [self frameForTabInTabBar:self.tabBar withIndex:i];
+        [preSizeAdjustment addObject:[NSValue valueWithCGRect:tabRect]];
     }
-    return returnArray;
+    //NSLog(@"\n\nprinting calculated tab rects:");
+    //for (int i = 0; i < preSizeAdjustment.count; i++) {
+    //    CGRect frame = [[preSizeAdjustment objectAtIndex:i] CGRectValue];
+    //    NSLog(@"frame for tab %d: (%0.2f, %0.2f, %0.2f, %0.2f", i, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    //}
+
+    NSMutableArray *postSizeAdjusted = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+    for (int i = 0; i < preSizeAdjustment.count; i++) {
+        NSValue *tabValue = [preSizeAdjustment objectAtIndex:i];
+        CGRect frame = tabValue.CGRectValue;
+        if (i == 0) {
+            // First tab: extend from bar origin to midpoint between first and second tab.
+            CGFloat rightSpace = ([[preSizeAdjustment objectAtIndex:i + 1] CGRectValue].origin.x - (frame.origin.x + frame.size.width)) / 2.f;
+            frame = CGRectMake(0, frame.origin.y, frame.size.width + frame.origin.x + rightSpace, frame.size.height);
+        }
+        else if (i == preSizeAdjustment.count - 1) {
+            // Last tab: extend from midpoint between previous tab and last tab to end of bar.
+            CGFloat leftSpace = (frame.origin.x - ([[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].origin.x + [[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].size.width)) / 2.f;
+            frame = CGRectMake(frame.origin.x - leftSpace, frame.origin.y, self.tabBar.bounds.size.width - frame.origin.x + leftSpace, frame.size.height);
+        }
+        else {
+            // Mid tabs: extend from midpoint between previous tab and current tab to midpoint between current tab and next tab.
+            CGFloat leftSpace = (frame.origin.x - ([[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].origin.x + [[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].size.width)) / 2.f;
+            CGFloat rightSpace = ([[preSizeAdjustment objectAtIndex:i + 1] CGRectValue].origin.x - (frame.origin.x + frame.size.width)) / 2.f;
+            
+            frame = CGRectMake(frame.origin.x - leftSpace, frame.origin.y, frame.size.width + leftSpace + rightSpace, frame.size.height);
+        }
+        
+        frame = CGRectMake(frame.origin.x, frame.origin.y - 1, frame.size.width, frame.size.height + 1);    // This adjusts for the 1 point of space above and below each tab. We don't want it so we make our frame swallow it up.
+        [postSizeAdjusted addObject:[NSValue valueWithCGRect:frame]];
+    }
+    
+    //NSLog(@"\n\nprinting calculated tab rects:");
+    //for (int i = 0; i < postSizeAdjusted.count; i++) {
+    //    CGRect frame = [[postSizeAdjusted objectAtIndex:i] CGRectValue];
+    //    NSLog(@"frame for tab %d: (%0.2f, %0.2f, %0.2f, %0.2f", i, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    //}
+    
+    return postSizeAdjusted;
+
+    // OLD
+//    CGRect tabBarRect = self.tabBar.bounds;
+//    NSInteger tabCount = self.tabBar.items.count;
+//    CGFloat tabWidth = tabBarRect.size.width / tabCount;
+//    NSMutableArray *returnArray = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+//    for (int i = 0; i < tabCount; i++) {
+//        CGRect tabRect = CGRectMake(tabWidth * i, 0, tabWidth, tabBarRect.size.height);
+//        [returnArray addObject:[NSValue valueWithCGRect:tabRect]];
+//    }
+//    return returnArray;
 }
 
 - (NSMutableArray *)calculateInvisibleTabRects
 {
-    CGRect tabBarRect = self.tabBar.bounds;
-    NSInteger tabCount = self.tabBar.items.count;
-    CGFloat tabWidth = tabBarRect.size.width / tabCount;
-    NSMutableArray *returnArray = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
-    for (int i = 0; i < tabCount; i++) {
-        CGRect tabRect = CGRectMake(tabWidth * i, -10, tabWidth, tabBarRect.size.height + 10);
-        [returnArray addObject:[NSValue valueWithCGRect:tabRect]];
+    //NSLog(@"calculating Invisible Tab Rects with tabBar.bounds.size.width = \'%0.2f\'", self.tabBar.bounds.size.width);
+    NSMutableArray *preSizeAdjustment = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+    for (int i = 0; i < self.tabBar.items.count; i++) {
+        CGRect tabRect = [self frameForTabInTabBar:self.tabBar withIndex:i];
+        //        CGRect adjustedRect = CGRectMake(tabRect.origin.x, -10, tabRect.size.width, tabRect.size.height + 10);
+        [preSizeAdjustment addObject:[NSValue valueWithCGRect:tabRect]];
     }
-    return returnArray;
+    //NSLog(@"\n\nprinting calculated tab rects:");
+    //for (int i = 0; i < preSizeAdjustment.count; i++) {
+    //    CGRect frame = [[preSizeAdjustment objectAtIndex:i] CGRectValue];
+    //    NSLog(@"frame for tab %d: (%0.2f, %0.2f, %0.2f, %0.2f", i, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    //}
+
+    NSMutableArray *postSizeAdjusted = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+    for (int i = 0; i < preSizeAdjustment.count; i++) {
+        NSValue *tabValue = [preSizeAdjustment objectAtIndex:i];
+        CGRect frame = tabValue.CGRectValue;
+        if (i == 0) {
+            // First tab: extend from bar origin to midpoint between first and second tab.
+            CGFloat rightSpace = ([[preSizeAdjustment objectAtIndex:i + 1] CGRectValue].origin.x - (frame.origin.x + frame.size.width)) / 2.f;
+            frame = CGRectMake(0, frame.origin.y, frame.size.width + frame.origin.x + rightSpace, frame.size.height);
+        }
+        else if (i == preSizeAdjustment.count - 1) {
+            // Last tab: extend from midpoint between previous tab and last tab to end of bar.
+            CGFloat leftSpace = (frame.origin.x - ([[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].origin.x + [[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].size.width)) / 2.f;
+            frame = CGRectMake(frame.origin.x - leftSpace, frame.origin.y, self.tabBar.bounds.size.width - frame.origin.x + leftSpace, frame.size.height);
+        }
+        else {
+            // Mid tabs: extend from midpoint between previous tab and current tab to midpoint between current tab and next tab.
+            CGFloat leftSpace = (frame.origin.x - ([[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].origin.x + [[preSizeAdjustment objectAtIndex:i - 1] CGRectValue].size.width)) / 2.f;
+            CGFloat rightSpace = ([[preSizeAdjustment objectAtIndex:i + 1] CGRectValue].origin.x - (frame.origin.x + frame.size.width)) / 2.f;
+            
+            frame = CGRectMake(frame.origin.x - leftSpace, frame.origin.y, frame.size.width + leftSpace + rightSpace, frame.size.height);
+        }
+        
+        frame = CGRectMake(frame.origin.x, frame.origin.y - 1, frame.size.width, frame.size.height + 1);    // This adjusts for the 1 point of space above and below each tab. We don't want it so we make our frame swallow it up.
+        [postSizeAdjusted addObject:[NSValue valueWithCGRect:frame]];
+    }
+    
+    //NSLog(@"\n\nprinting calculated invisible tap rects:");
+    //for (int i = 0; i < postSizeAdjusted.count; i++) {
+    //    CGRect frame = [[postSizeAdjusted objectAtIndex:i] CGRectValue];
+    //    NSLog(@"frame for tab %d: (%0.2f, %0.2f, %0.2f, %0.2f", i, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+    //}
+
+    return postSizeAdjusted;
+
+    // OLD
+//    CGRect tabBarRect = self.tabBar.bounds;
+//    NSInteger tabCount = self.tabBar.items.count;
+//    CGFloat tabWidth = tabBarRect.size.width / tabCount;
+//    NSMutableArray *returnArray = [NSMutableArray arrayWithCapacity:self.tabBar.items.count];
+//    for (int i = 0; i < tabCount; i++) {
+//        CGRect tabRect = CGRectMake(tabWidth * i, -10, tabWidth, tabBarRect.size.height + 10);
+//        [returnArray addObject:[NSValue valueWithCGRect:tabRect]];
+//    }
+//    return returnArray;
 }
 
+/*
+// No longer being used. But not sure if I want to delete it yet.
 - (UIView *)viewForTabBarItemAtIndex:(NSInteger)index
 {
-    
     CGRect tabBarRect = self.tabBar.frame;
     NSInteger buttonCount = self.tabBar.items.count;
     CGFloat containingWidth = tabBarRect.size.width / buttonCount;
@@ -423,11 +588,119 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
     CGPoint center = CGPointMake( CGRectGetMidX(containingRect), CGRectGetMidY(containingRect));
     
     return [self.tabBar hitTest:center withEvent:nil];
-}
+}*/
 
 - (CGRect)normalizedRectForRect:(CGRect)rect
 {
     return CGRectMake(0, 0, rect.size.width, rect.size.height);
+}
+
+- (CGRect)frameForTabInTabBar:(UITabBar*)tabBar withIndex:(NSUInteger)index
+{
+    NSMutableArray *tabBarItems = [NSMutableArray arrayWithCapacity:[tabBar.items count]];
+    for (UIView *view in tabBar.subviews) {
+        //        if ([view isKindOfClass:NSClassFromString(@"UITabBarButton")] && [view respondsToSelector:@selector(frame)]) {
+        if ([view isKindOfClass:[UIControl class]]) {
+            // check for the selector -frame to prevent crashes in the very unlikely case that in the future
+            // objects thar don't implement -frame can be subViews of an UIView
+            [tabBarItems addObject:view];
+        }
+    }
+    if ([tabBarItems count] == 0) {
+        // no tabBarItems means either no UITabBarButtons were in the subView, or none responded to -frame
+        // return CGRectZero to indicate that we couldn't figure out the frame
+        return CGRectZero;
+    }
+    
+    // sort by origin.x of the frame because the items are not necessarily in the correct order
+    [tabBarItems sortUsingComparator:^NSComparisonResult(UIView *view1, UIView *view2) {
+        if (view1.frame.origin.x < view2.frame.origin.x) {
+            return NSOrderedAscending;
+        }
+        if (view1.frame.origin.x > view2.frame.origin.x) {
+            return NSOrderedDescending;
+        }
+        NSAssert(YES, @"%@ and %@ share the same origin.x. This should never happen and indicates a substantial change in the framework that renders this method useless.", view1, view2);  // Unless you are just reording tabs...
+        return NSOrderedSame;
+    }];
+    
+    CGRect frame = CGRectZero;
+    if (index < [tabBarItems count]) {
+        // viewController is in a regular tab
+        UIView *tabView = tabBarItems[index];
+        if ([tabView respondsToSelector:@selector(frame)]) {
+            frame = tabView.frame;
+        }
+    }
+    else {
+        // our target viewController is inside the "more" tab
+        UIView *tabView = [tabBarItems lastObject];
+        if ([tabView respondsToSelector:@selector(frame)]) {
+            frame = tabView.frame;
+        }
+    }
+    
+//    UIView *tempTabCover = [[UIView alloc] initWithFrame:frame];
+//    tempTabCover.backgroundColor = [UIColor colorWithRed:1 green:0 blue:0 alpha:0.4];
+//    [self.tabBar addSubview:tempTabCover];
+    return frame;
+}
+
+- (UIView *)viewForTabInTabBar:(UITabBar*)tabBar withIndex:(NSUInteger)index
+{
+    NSMutableArray *tabBarItems = [NSMutableArray arrayWithCapacity:[tabBar.items count]];
+    for (UIView *view in tabBar.subviews) {
+        //        if ([view isKindOfClass:NSClassFromString(@"UITabBarButton")] && [view respondsToSelector:@selector(frame)]) {
+        if ([view isKindOfClass:[UIControl class]]) {
+            // check for the selector -frame to prevent crashes in the very unlikely case that in the future
+            // objects thar don't implement -frame can be subViews of an UIView
+            [tabBarItems addObject:view];
+        }
+    }
+    if ([tabBarItems count] == 0) {
+        // no tabBarItems means either no UITabBarButtons were in the subView, or none responded to -frame
+        // return CGRectZero to indicate that we couldn't figure out the frame
+        return nil;
+    }
+    
+    // sort by origin.x of the frame because the items are not necessarily in the correct order
+    [tabBarItems sortUsingComparator:^NSComparisonResult(UIView *view1, UIView *view2) {
+        if (view1.frame.origin.x < view2.frame.origin.x) {
+            return NSOrderedAscending;
+        }
+        if (view1.frame.origin.x > view2.frame.origin.x) {
+            return NSOrderedDescending;
+        }
+        NSAssert(YES, @"%@ and %@ share the same origin.x. This should never happen and indicates a substantial change in the framework that renders this method useless.", view1, view2);  // Unless you are just reording tabs...
+        return NSOrderedSame;
+    }];
+    
+    if (index < [tabBarItems count]) {
+        // viewController is in a regular tab
+        UIView *tabView = tabBarItems[index];
+        if ([tabView respondsToSelector:@selector(frame)]) {
+            return tabView;
+        }
+    }
+    else {
+        // our target viewController is inside the "more" tab
+        UIView *tabView = [tabBarItems lastObject];
+        if ([tabView respondsToSelector:@selector(frame)]) {
+            return tabView;
+        }
+    }
+    return nil;
+}
+
+
+#pragma mark - Tab Bar Delegate
+- (void)tabBar:(UITabBar *)tabBar didEndCustomizingItems:(NSArray *)items changed:(BOOL)changed
+{
+    [super tabBar:tabBar didEndCustomizingItems:items changed:changed];
+    
+    if (changed) {
+        [self updateTabBarVisuals];
+    }
 }
 
 
@@ -480,7 +753,7 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
     
     [self.backgroundColorFadeLayer addAnimation:fadeBackgroundDarker forKey:@"animateOpacity"];
     
-    UIView *tab = [self viewForTabBarItemAtIndex:self.selectedTabIndex];
+    UIView *tab = [self viewForTabInTabBar:self.tabBar withIndex:self.selectedTabIndex];
 
     CALayer *tapCircleLayer = [CALayer new];
     tapCircleLayer.frame = self.currentTabRect;
@@ -601,24 +874,25 @@ static CGFloat const bfPaperTabBarController_backgroundFadeConstant          = 0
 {
     //NSLog(@"Fading away");
     
-    CALayer *tempAnimationLayer = [self.rippleAnimationQueue firstObject];
-    if (nil != tempAnimationLayer) {
-        [self.deathRowForCircleLayers addObject:tempAnimationLayer];
-    }
     if (self.rippleAnimationQueue.count > 0) {
+        CALayer *tempAnimationLayer = [self.rippleAnimationQueue firstObject];
+        if (nil != tempAnimationLayer) {
+            [self.deathRowForCircleLayers addObject:tempAnimationLayer];
+        }
+
         [self.rippleAnimationQueue removeObjectAtIndex:0];
+
+        CABasicAnimation *fadeOut = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        [fadeOut setValue:@"fadeCircleOut" forKey:@"id"];
+        fadeOut.delegate = self;
+        fadeOut.fromValue = [NSNumber numberWithFloat:tempAnimationLayer.opacity];
+        fadeOut.toValue = [NSNumber numberWithFloat:0.f];
+        fadeOut.duration = bfPaperTabBarController_fadeOut;
+        fadeOut.fillMode = kCAFillModeForwards;
+        fadeOut.removedOnCompletion = NO;
+        
+        [tempAnimationLayer addAnimation:fadeOut forKey:@"opacityAnimation"];
     }
-    
-    CABasicAnimation *fadeOut = [CABasicAnimation animationWithKeyPath:@"opacity"];
-    [fadeOut setValue:@"fadeCircleOut" forKey:@"id"];
-    fadeOut.delegate = self;
-    fadeOut.fromValue = [NSNumber numberWithFloat:tempAnimationLayer.opacity];
-    fadeOut.toValue = [NSNumber numberWithFloat:0.f];
-    fadeOut.duration = bfPaperTabBarController_fadeOut;
-    fadeOut.fillMode = kCAFillModeForwards;
-    fadeOut.removedOnCompletion = NO;
-    
-    [tempAnimationLayer addAnimation:fadeOut forKey:@"opacityAnimation"];
 }
 #pragma mark -
 
